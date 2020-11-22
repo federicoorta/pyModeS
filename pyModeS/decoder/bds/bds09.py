@@ -1,44 +1,33 @@
-# Copyright (C) 2018 Junzi Sun (TU Delft)
+# ------------------------------------------
+#   BDS 0,9
+#   ADS-B TC=19
+#   Aircraft Airborn velocity
+# ------------------------------------------
 
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+from pyModeS import common
 
 
-"""
-------------------------------------------
-  BDS 0,9
-  ADS-B TC=19
-  Aircraft Airborn velocity
-------------------------------------------
-"""
-
-from __future__ import absolute_import, print_function, division
-from pyModeS.decoder import common
 import math
 
 
-def airborne_velocity(msg):
-    """Calculate the speed, track (or heading), and vertical rate
+def airborne_velocity(msg, source=False):
+    """Decode airborne velocity.
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
+        source (boolean): Include direction and vertical rate sources in return. Default to False.
+            If set to True, the function will return six value instead of four.
 
     Returns:
-        (int, float, int, string): speed (kt), ground track or heading (degree),
-            rate of climb/descend (ft/min), and speed type
-            ('GS' for ground speed, 'AS' for airspeed)
-    """
+        int, float, int, string, [string], [string]: Four or six parameters, including:
+            - Speed (kt)
+            - Angle (degree), either ground track or heading
+            - Vertical rate (ft/min)
+            - Speed type ('GS' for ground speed, 'AS' for airspeed)
+            - [Optional] Direction source ('TRUE_NORTH' or 'MAGENTIC_NORTH')
+            - [Optional] Vertical rate source ('BARO' or 'GNSS')
 
+    """
     if common.typecode(msg) != 19:
         raise RuntimeError("%s: Not a airborne velocity message, expecting TC=19" % msg)
 
@@ -50,27 +39,32 @@ def airborne_velocity(msg):
         return None
 
     if subtype in (1, 2):
-        v_ew_sign = -1 if mb[13]=='1' else 1
-        v_ew = common.bin2int(mb[14:24]) - 1       # east-west velocity
+        v_ew_sign = -1 if mb[13] == "1" else 1
+        v_ew = common.bin2int(mb[14:24]) - 1  # east-west velocity
+        if subtype == 2:  # Supersonic
+            v_ew *= 4
 
-        v_ns_sign = -1 if mb[24]=='1' else 1
-        v_ns = common.bin2int(mb[25:35]) - 1       # north-south velocity
+        v_ns_sign = -1 if mb[24] == "1" else 1
+        v_ns = common.bin2int(mb[25:35]) - 1  # north-south velocity
+        if subtype == 2:  # Supersonic
+            v_ns *= 4
 
         v_we = v_ew_sign * v_ew
         v_sn = v_ns_sign * v_ns
 
-        spd = math.sqrt(v_sn*v_sn + v_we*v_we)  # unit in kts
+        spd = math.sqrt(v_sn * v_sn + v_we * v_we)  # unit in kts
         spd = int(spd)
 
         trk = math.atan2(v_we, v_sn)
-        trk = math.degrees(trk)                 # convert to degrees
-        trk = trk if trk >= 0 else trk + 360    # no negative val
+        trk = math.degrees(trk)  # convert to degrees
+        trk = trk if trk >= 0 else trk + 360  # no negative val
 
-        tag = 'GS'
+        spd_type = "GS"
         trk_or_hdg = round(trk, 2)
+        dir_type = "TRUE_NORTH"
 
     else:
-        if mb[13] == '0':
+        if mb[13] == "0":
             hdg = None
         else:
             hdg = common.bin2int(mb[14:24]) / 1024.0 * 360.0
@@ -79,28 +73,38 @@ def airborne_velocity(msg):
         trk_or_hdg = hdg
 
         spd = common.bin2int(mb[25:35])
-        spd = None if spd==0 else spd-1
+        spd = None if spd == 0 else spd - 1
+        if subtype == 4:  # Supersonic
+            spd *= 4
 
-        if mb[24]=='0':
-            tag = 'IAS'
+        if mb[24] == "0":
+            spd_type = "IAS"
         else:
-            tag = 'TAS'
+            spd_type = "TAS"
 
-    vr_sign = -1 if mb[36]=='1' else 1
+        dir_type = "MAGENTIC_NORTH"
+
+    vr_source = "GNSS" if mb[35] == "0" else "BARO"
+    vr_sign = -1 if mb[36] == "1" else 1
     vr = common.bin2int(mb[37:46])
-    rocd = None if vr==0 else int(vr_sign*(vr-1)*64)
+    vs = None if vr == 0 else int(vr_sign * (vr - 1) * 64)
 
-    return spd, trk_or_hdg, rocd, tag
+    if source:
+        return spd, trk_or_hdg, vs, spd_type, dir_type, vr_source
+    else:
+        return spd, trk_or_hdg, vs, spd_type
+
 
 def altitude_diff(msg):
-    """Decode the differece between GNSS and barometric altitude
+    """Decode the differece between GNSS and barometric altitude.
 
     Args:
-        msg (string): 28 bytes hexadecimal message string, TC=19
+        msg (str): 28 hexdigits string, TC=19
 
     Returns:
-        int: Altitude difference in ft. Negative value indicates GNSS altitude
-            below barometric altitude.
+        int: Altitude difference in feet. Negative value indicates GNSS altitude
+        below barometric altitude.
+
     """
     tc = common.typecode(msg)
 
@@ -114,4 +118,4 @@ def altitude_diff(msg):
     if value == 0 or value == 127:
         return None
     else:
-        return sign * (value - 1) * 25    # in ft.
+        return sign * (value - 1) * 25  # in ft.

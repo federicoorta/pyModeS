@@ -1,89 +1,102 @@
-# Copyright (C) 2015 Junzi Sun (TU Delft)
+"""ADS-B module.
 
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+The ADS-B module also imports functions from the following modules:
 
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- pyModeS.decoder.bds.bds05: ``airborne_position()``, ``airborne_position_with_ref()``, ``altitude()``
+- pyModeS.decoder.bds.bds06: ``surface_position()``, ``surface_position_with_ref()``, ``surface_velocity()``
+- pyModeS.decoder.bds.bds08: ``category()``, ``callsign()``
+- pyModeS.decoder.bds.bds09: ``airborne_velocity()``, ``altitude_diff()``
 
 """
-The wrapper for decoding ADS-B messages
-"""
-
-from __future__ import absolute_import, print_function, division
 
 import pyModeS as pms
-from pyModeS.decoder import common
+
+from pyModeS import common
+
 from pyModeS.decoder import uncertainty
 
 # from pyModeS.decoder.bds import bds05, bds06, bds09
-from pyModeS.decoder.bds.bds05 import airborne_position, airborne_position_with_ref, altitude
-from pyModeS.decoder.bds.bds06 import surface_position, surface_position_with_ref, surface_velocity
+from pyModeS.decoder.bds.bds05 import (
+    airborne_position,
+    airborne_position_with_ref,
+    altitude as altitude05,
+)
+from pyModeS.decoder.bds.bds06 import (
+    surface_position,
+    surface_position_with_ref,
+    surface_velocity,
+)
 from pyModeS.decoder.bds.bds08 import category, callsign
 from pyModeS.decoder.bds.bds09 import airborne_velocity, altitude_diff
+from pyModeS.decoder.bds.bds61 import is_emergency, emergency_state, emergency_squawk
+
 
 def df(msg):
     return common.df(msg)
 
+
 def icao(msg):
     return common.icao(msg)
+
 
 def typecode(msg):
     return common.typecode(msg)
 
+
 def position(msg0, msg1, t0, t1, lat_ref=None, lon_ref=None):
-    """Decode position from a pair of even and odd position message
-    (works with both airborne and surface position messages)
+    """Decode surface or airborne position from a pair of even and odd
+    position messages.
+
+    Note, that to decode surface position using the position message pair,
+    the reference position has to be provided.
 
     Args:
-        msg0 (string): even message (28 bytes hexadecimal string)
-        msg1 (string): odd message (28 bytes hexadecimal string)
+        msg0 (string): even message (28 hexdigits)
+        msg1 (string): odd message (28 hexdigits)
         t0 (int): timestamps for the even message
         t1 (int): timestamps for the odd message
+        lat_ref (float): latitude of reference position
+        lon_ref (float): longitude of reference position
 
     Returns:
         (float, float): (latitude, longitude) of the aircraft
+
     """
     tc0 = typecode(msg0)
     tc1 = typecode(msg1)
 
-    if (5<=tc0<=8 and 5<=tc1<=8):
-        if (not lat_ref) or (not lon_ref):
-            raise RuntimeError("Surface position encountered, a reference \
-                               position lat/lon required. Location of \
-                               receiver can be used.")
+    if 5 <= tc0 <= 8 and 5 <= tc1 <= 8:
+        if lat_ref is None or lon_ref is None:
+            raise RuntimeError(
+                "Surface position encountered, a reference position"
+                " lat/lon required. Location of receiver can be used."
+            )
         else:
             return surface_position(msg0, msg1, t0, t1, lat_ref, lon_ref)
 
-    elif (9<=tc0<=18 and 9<=tc1<=18):
+    elif 9 <= tc0 <= 18 and 9 <= tc1 <= 18:
         # Airborne position with barometric height
         return airborne_position(msg0, msg1, t0, t1)
 
-    elif (20<=tc0<=22 and 20<=tc1<=22):
+    elif 20 <= tc0 <= 22 and 20 <= tc1 <= 22:
         # Airborne position with GNSS height
         return airborne_position(msg0, msg1, t0, t1)
 
     else:
-        raise RuntimeError("incorrect or inconsistant message types")
+        raise RuntimeError("Incorrect or inconsistent message types")
 
 
 def position_with_ref(msg, lat_ref, lon_ref):
-    """Decode position with only one message,
-    knowing reference nearby location, such as previously
-    calculated location, ground station, or airport location, etc.
-    Works with both airborne and surface position messages.
+    """Decode position with only one message.
+
+    A reference position is required, which can be previously
+    calculated location, ground station, or airport location.
+    The function works with both airborne and surface position messages.
     The reference position shall be with in 180NM (airborne) or 45NM (surface)
     of the true position.
 
     Args:
-        msg (string): even message (28 bytes hexadecimal string)
+        msg (str): even message (28 hexdigits)
         lat_ref: previous known latitude
         lon_ref: previous known longitude
 
@@ -93,66 +106,70 @@ def position_with_ref(msg, lat_ref, lon_ref):
 
     tc = typecode(msg)
 
-    if 5<=tc<=8:
+    if 5 <= tc <= 8:
         return surface_position_with_ref(msg, lat_ref, lon_ref)
 
-    elif 9<=tc<=18 or 20<=tc<=22:
+    elif 9 <= tc <= 18 or 20 <= tc <= 22:
         return airborne_position_with_ref(msg, lat_ref, lon_ref)
 
     else:
-        raise RuntimeError("incorrect or inconsistant message types")
+        raise RuntimeError("incorrect or inconsistent message types")
 
 
 def altitude(msg):
-    """Decode aircraft altitude
+    """Decode aircraft altitude.
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         int: altitude in feet
-    """
 
+    """
     tc = typecode(msg)
 
-    if tc<5 or tc==19 or tc>22:
+    if tc < 5 or tc == 19 or tc > 22:
         raise RuntimeError("%s: Not a position message" % msg)
 
-    if tc>=5 and tc<=8:
+    elif tc >= 5 and tc <= 8:
         # surface position, altitude 0
         return 0
 
-    msgbin = common.hex2bin(msg)
-    q = msgbin[47]
-    if q:
-        n = common.bin2int(msgbin[40:47]+msgbin[48:52])
-        alt = n * 25 - 1000
-        return alt
     else:
-        return None
+        # airborn position
+        return altitude05(msg)
 
 
-def velocity(msg):
-    """Calculate the speed, heading, and vertical rate
-    (handles both airborne or surface message)
+def velocity(msg, source=False):
+    """Calculate the speed, heading, and vertical rate (handles both airborne or surface message).
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
+        source (boolean): Include direction and vertical rate sources in return. Default to False.
+            If set to True, the function will return six value instead of four.
 
     Returns:
-        (int, float, int, string): speed (kt), ground track or heading (degree),
-            rate of climb/descend (ft/min), and speed type
-            ('GS' for ground speed, 'AS' for airspeed)
-    """
+        int, float, int, string, [string], [string]: Four or six parameters, including:
+            - Speed (kt)
+            - Angle (degree), either ground track or heading
+            - Vertical rate (ft/min)
+            - Speed type ('GS' for ground speed, 'AS' for airspeed)
+            - [Optional] Direction source ('TRUE_NORTH' or 'MAGENTIC_NORTH')
+            - [Optional] Vertical rate source ('BARO' or 'GNSS')
 
+        For surface messages, vertical rate and its respective sources are set to None.
+
+    """
     if 5 <= typecode(msg) <= 8:
-        return surface_velocity(msg)
+        return surface_velocity(msg, source)
 
     elif typecode(msg) == 19:
-        return airborne_velocity(msg)
+        return airborne_velocity(msg, source)
 
     else:
-        raise RuntimeError("incorrect or inconsistant message types, expecting 4<TC<9 or TC=19")
+        raise RuntimeError(
+            "incorrect or inconsistent message types, expecting 4<TC<9 or TC=19"
+        )
 
 
 def speed_heading(msg):
@@ -160,7 +177,7 @@ def speed_heading(msg):
     (handles both airborne or surface message)
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         (int, float): speed (kt), ground track or heading (degree)
@@ -172,7 +189,7 @@ def speed_heading(msg):
 def oe_flag(msg):
     """Check the odd/even flag. Bit 54, 0 for even, 1 for odd.
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
     Returns:
         int: 0 or 1, for even or odd frame
     """
@@ -184,7 +201,7 @@ def version(msg):
     """ADS-B Version
 
     Args:
-        msg (string): 28 bytes hexadecimal message string, TC = 31
+        msg (str): 28 hexdigits string, TC = 31
 
     Returns:
         int: version number
@@ -192,7 +209,9 @@ def version(msg):
     tc = typecode(msg)
 
     if tc != 31:
-        raise RuntimeError("%s: Not a status operation message, expecting TC = 31" % msg)
+        raise RuntimeError(
+            "%s: Not a status operation message, expecting TC = 31" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     version = common.bin2int(msgbin[72:75])
@@ -204,7 +223,7 @@ def nuc_p(msg):
     """Calculate NUCp, Navigation Uncertainty Category - Position (ADS-B version 1)
 
     Args:
-        msg (string): 28 bytes hexadecimal message string,
+        msg (str): 28 hexdigits string,
 
     Returns:
         int: Horizontal Protection Limit
@@ -218,14 +237,17 @@ def nuc_p(msg):
         raise RuntimeError(
             "%s: Not a surface position message (5<TC<8), \
             airborne position message (8<TC<19), \
-            or airborne position with GNSS height (20<TC<22)" % msg
+            or airborne position with GNSS height (20<TC<22)"
+            % msg
         )
 
-    NUCp = uncertainty.TC_NUCp_lookup[tc]
-
-    HPL = uncertainty.NUCp[NUCp]['HPL']
-    RCu = uncertainty.NUCp[NUCp]['RCu']
-    RCv = uncertainty.NUCp[NUCp]['RCv']
+    try:
+        NUCp = uncertainty.TC_NUCp_lookup[tc]
+        HPL = uncertainty.NUCp[NUCp]["HPL"]
+        RCu = uncertainty.NUCp[NUCp]["RCu"]
+        RCv = uncertainty.NUCp[NUCp]["RCv"]
+    except KeyError:
+        HPL, RCu, RCv = uncertainty.NA, uncertainty.NA, uncertainty.NA
 
     if tc in [20, 21]:
         RCv = uncertainty.NA
@@ -237,7 +259,7 @@ def nuc_v(msg):
     """Calculate NUCv, Navigation Uncertainty Category - Velocity (ADS-B version 1)
 
     Args:
-        msg (string): 28 bytes hexadecimal message string,
+        msg (str): 28 hexdigits string,
 
     Returns:
         int or string: 95% Horizontal Velocity Error
@@ -246,14 +268,18 @@ def nuc_v(msg):
     tc = typecode(msg)
 
     if tc != 19:
-        raise RuntimeError("%s: Not an airborne velocity message, expecting TC = 19" % msg)
-
+        raise RuntimeError(
+            "%s: Not an airborne velocity message, expecting TC = 19" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     NUCv = common.bin2int(msgbin[42:45])
 
-    HVE = uncertainty.NUCv[NUCv]['HVE']
-    VVE = uncertainty.NUCv[NUCv]['VVE']
+    try:
+        HVE = uncertainty.NUCv[NUCv]["HVE"]
+        VVE = uncertainty.NUCv[NUCv]["VVE"]
+    except KeyError:
+        HVE, VVE = uncertainty.NA, uncertainty.NA
 
     return HVE, VVE
 
@@ -262,7 +288,7 @@ def nic_v1(msg, NICs):
     """Calculate NIC, navigation integrity category, for ADS-B version 1
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
         NICs (int or string): NIC supplement
 
     Returns:
@@ -273,7 +299,8 @@ def nic_v1(msg, NICs):
         raise RuntimeError(
             "%s: Not a surface position message (5<TC<8), \
             airborne position message (8<TC<19), \
-            or airborne position with GNSS height (20<TC<22)" % msg
+            or airborne position with GNSS height (20<TC<22)"
+            % msg
         )
 
     tc = typecode(msg)
@@ -282,8 +309,11 @@ def nic_v1(msg, NICs):
     if isinstance(NIC, dict):
         NIC = NIC[NICs]
 
-    Rc = uncertainty.NICv1[NIC][NICs]['Rc']
-    VPL = uncertainty.NICv1[NIC][NICs]['VPL']
+    try:
+        Rc = uncertainty.NICv1[NIC][NICs]["Rc"]
+        VPL = uncertainty.NICv1[NIC][NICs]["VPL"]
+    except KeyError:
+        Rc, VPL = uncertainty.NA, uncertainty.NA
 
     return Rc, VPL
 
@@ -292,7 +322,7 @@ def nic_v2(msg, NICa, NICbc):
     """Calculate NIC, navigation integrity category, for ADS-B version 2
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
         NICa (int or string): NIC supplement - A
         NICbc (int or srting): NIC supplement - B or C
 
@@ -303,21 +333,25 @@ def nic_v2(msg, NICa, NICbc):
         raise RuntimeError(
             "%s: Not a surface position message (5<TC<8), \
             airborne position message (8<TC<19), \
-            or airborne position with GNSS height (20<TC<22)" % msg
+            or airborne position with GNSS height (20<TC<22)"
+            % msg
         )
 
     tc = typecode(msg)
     NIC = uncertainty.TC_NICv2_lookup[tc]
 
-    if 20<=tc<=22:
+    if 20 <= tc <= 22:
         NICs = 0
     else:
-        NICs = NICa*2 + NICbc
+        NICs = NICa * 2 + NICbc
 
-    if isinstance(NIC, dict):
-        NIC = NIC[NICs]
+    try:
+        if isinstance(NIC, dict):
+            NIC = NIC[NICs]
 
-    Rc = uncertainty.NICv2[NIC][NICs]['Rc']
+        Rc = uncertainty.NICv2[NIC][NICs]["Rc"]
+    except KeyError:
+        Rc = uncertainty.NA
 
     return Rc
 
@@ -326,7 +360,7 @@ def nic_s(msg):
     """Obtain NIC supplement bit, TC=31 message
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         int: NICs number (0 or 1)
@@ -334,7 +368,9 @@ def nic_s(msg):
     tc = typecode(msg)
 
     if tc != 31:
-        raise RuntimeError("%s: Not a status operation message, expecting TC = 31" % msg)
+        raise RuntimeError(
+            "%s: Not a status operation message, expecting TC = 31" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     nic_s = int(msgbin[75])
@@ -346,7 +382,7 @@ def nic_a_c(msg):
     """Obtain NICa/c, navigation integrity category supplements a and c
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         (int, int): NICa and NICc number (0 or 1)
@@ -354,7 +390,9 @@ def nic_a_c(msg):
     tc = typecode(msg)
 
     if tc != 31:
-        raise RuntimeError("%s: Not a status operation message, expecting TC = 31" % msg)
+        raise RuntimeError(
+            "%s: Not a status operation message, expecting TC = 31" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     nic_a = int(msgbin[75])
@@ -367,7 +405,7 @@ def nic_b(msg):
     """Obtain NICb, navigation integrity category supplement-b
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         int: NICb number (0 or 1)
@@ -375,7 +413,9 @@ def nic_b(msg):
     tc = typecode(msg)
 
     if tc < 9 or tc > 18:
-        raise RuntimeError("%s: Not a airborne position message, expecting 8<TC<19" % msg)
+        raise RuntimeError(
+            "%s: Not a airborne position message, expecting 8<TC<19" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     nic_b = int(msgbin[39])
@@ -387,7 +427,7 @@ def nac_p(msg):
     """Calculate NACp, Navigation Accuracy Category - Position
 
     Args:
-        msg (string): 28 bytes hexadecimal message string, TC = 29 or 31
+        msg (str): 28 hexdigits string, TC = 29 or 31
 
     Returns:
         int or string: 95% horizontal accuracy bounds, Estimated Position Uncertainty
@@ -396,8 +436,11 @@ def nac_p(msg):
     tc = typecode(msg)
 
     if tc not in [29, 31]:
-        raise RuntimeError("%s: Not a target state and status message, \
-                           or operation status message, expecting TC = 29 or 31" % msg)
+        raise RuntimeError(
+            "%s: Not a target state and status message, \
+                           or operation status message, expecting TC = 29 or 31"
+            % msg
+        )
 
     msgbin = common.hex2bin(msg)
 
@@ -406,16 +449,20 @@ def nac_p(msg):
     elif tc == 31:
         NACp = common.bin2int(msgbin[76:80])
 
-    EPU = uncertainty.NACp[NACp]['EPU']
-    VEPU = uncertainty.NACp[NACp]['VEPU']
+    try:
+        EPU = uncertainty.NACp[NACp]["EPU"]
+        VEPU = uncertainty.NACp[NACp]["VEPU"]
+    except KeyError:
+        EPU, VEPU = uncertainty.NA, uncertainty.NA
 
     return EPU, VEPU
+
 
 def nac_v(msg):
     """Calculate NACv, Navigation Accuracy Category - Velocity
 
     Args:
-        msg (string): 28 bytes hexadecimal message string, TC = 19
+        msg (str): 28 hexdigits string, TC = 19
 
     Returns:
         int or string: 95% horizontal accuracy bounds for velocity, Horizontal Figure of Merit
@@ -424,13 +471,18 @@ def nac_v(msg):
     tc = typecode(msg)
 
     if tc != 19:
-        raise RuntimeError("%s: Not an airborne velocity message, expecting TC = 19" % msg)
+        raise RuntimeError(
+            "%s: Not an airborne velocity message, expecting TC = 19" % msg
+        )
 
     msgbin = common.hex2bin(msg)
     NACv = common.bin2int(msgbin[42:45])
 
-    HFOMr = uncertainty.NACv[NACv]['HFOMr']
-    VFOMr = uncertainty.NACv[NACv]['VFOMr']
+    try:
+        HFOMr = uncertainty.NACv[NACv]["HFOMr"]
+        VFOMr = uncertainty.NACv[NACv]["VFOMr"]
+    except KeyError:
+        HFOMr, VFOMr = uncertainty.NA, uncertainty.NA
 
     return HFOMr, VFOMr
 
@@ -439,7 +491,7 @@ def sil(msg, version):
     """Calculate SIL, Surveillance Integrity Level
 
     Args:
-        msg (string): 28 bytes hexadecimal message string with TC = 29, 31
+        msg (str): 28 hexdigits string with TC = 29, 31
 
     Returns:
         int or string: Probability of exceeding Horizontal Radius of Containment RCu
@@ -449,8 +501,11 @@ def sil(msg, version):
     tc = typecode(msg)
 
     if tc not in [29, 31]:
-        raise RuntimeError("%s: Not a target state and status messag, \
-                           or operation status message, expecting TC = 29 or 31" % msg)
+        raise RuntimeError(
+            "%s: Not a target state and status message, \
+                           or operation status message, expecting TC = 29 or 31"
+            % msg
+        )
 
     msgbin = common.hex2bin(msg)
 
@@ -459,10 +514,13 @@ def sil(msg, version):
     elif tc == 31:
         SIL = common.bin2int(msgbin[82:84])
 
-    PE_RCu = uncertainty.SIL[SIL]['PE_RCu']
-    PE_VPL = uncertainty.SIL[SIL]['PE_VPL']
+    try:
+        PE_RCu = uncertainty.SIL[SIL]["PE_RCu"]
+        PE_VPL = uncertainty.SIL[SIL]["PE_VPL"]
+    except KeyError:
+        PE_RCu, PE_VPL = uncertainty.NA, uncertainty.NA
 
-    base = 'unknown'
+    base = "unknown"
 
     if version == 2:
         if tc == 29:

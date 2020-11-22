@@ -1,21 +1,75 @@
-# Copyright (C) 2018 Junzi Sun (TU Delft)
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 """
-Decoding all call replies DF=11
+Decode all-call reply messages, with dowlink format 11
 """
 
-from __future__ import absolute_import, print_function, division
-from pyModeS.decoder import common
+from pyModeS import common
+
+
+def _checkdf(func):
+    """Ensure downlink format is 11."""
+
+    def wrapper(msg):
+        df = common.df(msg)
+        if df != 11:
+            raise RuntimeError(
+                "Incorrect downlink format, expect 11, got {}".format(df)
+            )
+        return func(msg)
+
+    return wrapper
+
+
+@_checkdf
+def icao(msg):
+    """Decode transponder code (ICAO address).
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        string: ICAO address
+
+    """
+    return common.icao(msg)
+
+
+@_checkdf
+def interrogator(msg):
+    """Decode interrogator identifier code.
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        int: interrogator identifier code
+
+    """
+    # simply the CRC reminder
+    return common.crc(msg)
+
+
+@_checkdf
+def capability(msg):
+    """Decode transponder capability.
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        int, str: transponder capability, description
+
+    """
+    msgbin = common.hex2bin(msg)
+    ca = common.bin2int(msgbin[5:8])
+
+    if ca == 0:
+        text = "level 1 transponder"
+    elif ca == 4:
+        text = "level 2 transponder, ability to set CA to 7, on ground"
+    elif ca == 5:
+        text = "level 2 transponder, ability to set CA to 7, airborne"
+    elif ca == 6:
+        text = "evel 2 transponder, ability to set CA to 7, either airborne or ground"
+    elif ca == 7:
+        text = "Downlink Request value is 0,or the Flight Status is 2, 3, 4 or 5, either airborne or on the ground"
+    else:
+        text = None
+
+    return ca, text

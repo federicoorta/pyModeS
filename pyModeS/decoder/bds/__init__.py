@@ -18,59 +18,84 @@
 Common functions for Mode-S decoding
 """
 
-from __future__ import absolute_import, print_function, division
 import numpy as np
 
 from pyModeS.extra import aero
-from pyModeS.decoder import common
-from pyModeS.decoder.bds import bds05, bds06, bds08, bds09, \
-    bds10, bds17, bds20, bds30, bds40, bds44, bds50, bds53, bds60
+from pyModeS import common
+
+from pyModeS.decoder.bds import (
+    bds05,
+    bds06,
+    bds08,
+    bds09,
+    bds10,
+    bds17,
+    bds20,
+    bds30,
+    bds40,
+    bds44,
+    bds45,
+    bds50,
+    bds53,
+    bds60,
+)
 
 
 def is50or60(msg, spd_ref, trk_ref, alt_ref):
-    """Use reference ground speed and trk to determine BDS50 and DBS60
+    """Use reference ground speed and trk to determine BDS50 and DBS60.
 
     Args:
-        msg (String): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
         spd_ref (float): reference speed (ADS-B ground speed), kts
         trk_ref (float): reference track (ADS-B track angle), deg
         alt_ref (float): reference altitude (ADS-B altitude), ft
 
     Returns:
         String or None: BDS version, or possible versions, or None if nothing matches.
+
     """
+
     def vxy(v, angle):
         vx = v * np.sin(np.radians(angle))
         vy = v * np.cos(np.radians(angle))
         return vx, vy
 
+    # message must be both BDS 50 and 60 before processing
     if not (bds50.is50(msg) and bds60.is60(msg)):
         return None
 
-    h50 = bds50.trk50(msg)
-    v50 = bds50.gs50(msg)
-
-    if h50 is None or v50 is None:
-        return 'BDS50,BDS60'
-
+    # --- assuming BDS60 ---
     h60 = bds60.hdg60(msg)
     m60 = bds60.mach60(msg)
     i60 = bds60.ias60(msg)
 
+    # additional check now knowing the altitude
+    if (m60 is not None) and (i60 is not None):
+        ias_ = aero.mach2cas(m60, alt_ref * aero.ft) / aero.kts
+        if abs(i60 - ias_) > 20:
+            return "BDS50"
+
     if h60 is None or (m60 is None and i60 is None):
-        return 'BDS50,BDS60'
+        return "BDS50,BDS60"
 
     m60 = np.nan if m60 is None else m60
     i60 = np.nan if i60 is None else i60
 
-    XY5 = vxy(v50*aero.kts, h50)
-    XY6m = vxy(aero.mach2tas(m60, alt_ref*aero.ft), h60)
-    XY6i = vxy(aero.cas2tas(i60*aero.kts, alt_ref*aero.ft), h60)
+    # --- assuming BDS50 ---
+    h50 = bds50.trk50(msg)
+    v50 = bds50.gs50(msg)
 
-    allbds = ['BDS50', 'BDS60', 'BDS60']
+    if h50 is None or v50 is None:
+        return "BDS50,BDS60"
+
+    XY5 = vxy(v50 * aero.kts, h50)
+    XY6m = vxy(aero.mach2tas(m60, alt_ref * aero.ft), h60)
+    XY6i = vxy(aero.cas2tas(i60 * aero.kts, alt_ref * aero.ft), h60)
+
+    allbds = ["BDS50", "BDS60", "BDS60"]
 
     X = np.array([XY5, XY6m, XY6i])
-    Mu = np.array(vxy(spd_ref*aero.kts, trk_ref))
+    Mu = np.array(vxy(spd_ref * aero.kts, trk_ref))
 
     # compute Mahalanobis distance matrix
     # Cov = [[20**2, 0], [0, 20**2]]
@@ -80,51 +105,52 @@ def is50or60(msg, spd_ref, trk_ref, alt_ref):
     # since the covariance matrix is identity matrix,
     #     M-dist is same as eculidian distance
     try:
-        dist = np.linalg.norm(X-Mu, axis=1)
+        dist = np.linalg.norm(X - Mu, axis=1)
         BDS = allbds[np.nanargmin(dist)]
     except ValueError:
-        return 'BDS50,BDS60'
+        return "BDS50,BDS60"
 
     return BDS
 
 
-def infer(msg):
-    """Estimate the most likely BDS code of an message
+def infer(msg, mrar=False):
+    """Estimate the most likely BDS code of an message.
 
     Args:
-        msg (String): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
+        mrar (bool): Also infer MRAR (BDS 44) and MHR (BDS 45). Defaults to False.
 
     Returns:
         String or None: BDS version, or possible versions, or None if nothing matches.
-    """
 
+    """
     df = common.df(msg)
 
     if common.allzeros(msg):
-        return 'EMPTY'
+        return "EMPTY"
 
     # For ADS-B / Mode-S extended squitter
     if df == 17:
         tc = common.typecode(msg)
 
         if 1 <= tc <= 4:
-            return 'BDS08'  # indentification and category
+            return "BDS08"  # identification and category
         if 5 <= tc <= 8:
-            return 'BDS06'  # surface movement
+            return "BDS06"  # surface movement
         if 9 <= tc <= 18:
-            return 'BDS05'  # airborne position, baro-alt
+            return "BDS05"  # airborne position, baro-alt
         if tc == 19:
-            return 'BDS09'  # airborne velocity
+            return "BDS09"  # airborne velocity
         if 20 <= tc <= 22:
-            return 'BDS05'  # airborne position, gnss-alt
+            return "BDS05"  # airborne position, gnss-alt
         if tc == 28:
-            return 'BDS61'  # aircraft status
+            return "BDS61"  # aircraft status
         if tc == 29:
-            return 'BDS62'  # target state and status
+            return "BDS62"  # target state and status
         if tc == 31:
-            return 'BDS65'  # operational status
+            return "BDS65"  # operational status
 
-    # For Comm-B replies, ELS + EHS only
+    # For Comm-B replies
     IS10 = bds10.is10(msg)
     IS17 = bds17.is17(msg)
     IS20 = bds20.is20(msg)
@@ -132,14 +158,31 @@ def infer(msg):
     IS40 = bds40.is40(msg)
     IS50 = bds50.is50(msg)
     IS60 = bds60.is60(msg)
+    IS44 = bds44.is44(msg)
+    IS45 = bds45.is45(msg)
 
-    allbds = np.array([
-        "BDS10", "BDS17", "BDS20", "BDS30", "BDS40", "BDS50", "BDS60"
-    ])
+    if mrar:
+        allbds = np.array(
+            [
+                "BDS10",
+                "BDS17",
+                "BDS20",
+                "BDS30",
+                "BDS40",
+                "BDS44",
+                "BDS45",
+                "BDS50",
+                "BDS60",
+            ]
+        )
+        mask = [IS10, IS17, IS20, IS30, IS40, IS44, IS45, IS50, IS60]
+    else:
+        allbds = np.array(
+            ["BDS10", "BDS17", "BDS20", "BDS30", "BDS40", "BDS50", "BDS60"]
+        )
+        mask = [IS10, IS17, IS20, IS30, IS40, IS50, IS60]
 
-    mask = [IS10, IS17, IS20, IS30, IS40, IS50, IS60]
-
-    bds = ','.join(sorted(allbds[mask]))
+    bds = ",".join(sorted(allbds[mask]))
 
     if len(bds) == 0:
         return None

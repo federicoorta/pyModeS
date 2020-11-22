@@ -1,21 +1,132 @@
-# Copyright (C) 2018 Junzi Sun (TU Delft)
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 """
-Warpper for short roll call surveillance replies DF=4/5
+Decode short roll call surveillance replies, with downlink format 4 or 5
 """
 
-from __future__ import absolute_import, print_function, division
-from pyModeS.decoder import common
+from pyModeS import common
+
+
+def _checkdf(func):
+    """Ensure downlink format is 4 or 5."""
+
+    def wrapper(msg):
+        df = common.df(msg)
+        if df not in [4, 5]:
+            raise RuntimeError(
+                "Incorrect downlink format, expect 4 or 5, got {}".format(df)
+            )
+        return func(msg)
+
+    return wrapper
+
+
+@_checkdf
+def fs(msg):
+    """Decode flight status.
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        int, str: flight status, description
+
+    """
+    msgbin = common.hex2bin(msg)
+    fs = common.bin2int(msgbin[5:8])
+    text = None
+
+    if fs == 0:
+        text = "no alert, no SPI, aircraft is airborne"
+    elif fs == 1:
+        text = "no alert, no SPI, aircraft is on-ground"
+    elif fs == 2:
+        text = "alert, no SPI, aircraft is airborne"
+    elif fs == 3:
+        text = "alert, no SPI, aircraft is on-ground"
+    elif fs == 4:
+        text = "alert, SPI, aircraft is airborne or on-ground"
+    elif fs == 5:
+        text = "no alert, SPI, aircraft is airborne or on-ground"
+
+    return fs, text
+
+
+@_checkdf
+def dr(msg):
+    """Decode downlink request.
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        int, str: downlink request, description
+
+    """
+    msgbin = common.hex2bin(msg)
+    dr = common.bin2int(msgbin[8:13])
+
+    text = None
+
+    if dr == 0:
+        text = "no downlink request"
+    elif dr == 1:
+        text = "request to send Comm-B message"
+    elif dr == 4:
+        text = "Comm-B broadcast 1 available"
+    elif dr == 5:
+        text = "Comm-B broadcast 2 available"
+    elif dr >= 16:
+        text = "ELM downlink segments available: {}".format(dr - 15)
+
+    return dr, text
+
+
+@_checkdf
+def um(msg):
+    """Decode utility message.
+
+    Utility message contains interrogator identifier and reservation type.
+
+    Args:
+        msg (str): 14 hexdigits string
+    Returns:
+        int, str: interrogator identifier code that triggered the reply, and
+        reservation type made by the interrogator
+    """
+    msgbin = common.hex2bin(msg)
+    iis = common.bin2int(msgbin[13:17])
+    ids = common.bin2int(msgbin[17:19])
+    if ids == 0:
+        ids_text = None
+    if ids == 1:
+        ids_text = "Comm-B interrogator identifier code"
+    if ids == 2:
+        ids_text = "Comm-C interrogator identifier code"
+    if ids == 3:
+        ids_text = "Comm-D interrogator identifier code"
+    return iis, ids, ids_text
+
+
+@_checkdf
+def altitude(msg):
+    """Decode altitude.
+
+    Args:
+        msg (String): 14 hexdigits string
+
+    Returns:
+        int: altitude in ft
+
+    """
+    return common.altcode(msg)
+
+
+@_checkdf
+def identity(msg):
+    """Decode squawk code.
+
+    Args:
+        msg (String): 14 hexdigits string
+
+    Returns:
+        string: squawk code
+
+    """
+    return common.idcode(msg)

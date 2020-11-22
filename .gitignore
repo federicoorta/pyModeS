@@ -5,6 +5,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+#cython
+*.c
+
 # C extensions
 *.so
 
@@ -58,3 +61,9 @@ target/
 
 # PyCharm
 .idea/
+
+# Environments
+.env
+.venv
+env/
+venv/

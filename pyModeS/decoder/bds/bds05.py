@@ -1,36 +1,18 @@
-# Copyright (C) 2018 Junzi Sun (TU Delft)
+# ------------------------------------------
+#   BDS 0,5
+#   ADS-B TC=9-18
+#   Airborn position
+# ------------------------------------------
 
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+from pyModeS import common
 
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
-"""
-------------------------------------------
-  BDS 0,5
-  ADS-B TC=9-18
-  Airborn position
-------------------------------------------
-"""
-
-from __future__ import absolute_import, print_function, division
-from pyModeS.decoder import common
 
 def airborne_position(msg0, msg1, t0, t1):
     """Decode airborn position from a pair of even and odd position message
 
     Args:
-        msg0 (string): even message (28 bytes hexadecimal string)
-        msg1 (string): odd message (28 bytes hexadecimal string)
+        msg0 (string): even message (28 hexdigits)
+        msg1 (string): odd message (28 hexdigits)
         t0 (int): timestamps for the even message
         t1 (int): timestamps for the odd message
 
@@ -40,6 +22,16 @@ def airborne_position(msg0, msg1, t0, t1):
 
     mb0 = common.hex2bin(msg0)[32:]
     mb1 = common.hex2bin(msg1)[32:]
+
+    oe0 = int(mb0[21])
+    oe1 = int(mb1[21])
+    if oe0 == 0 and oe1 == 1:
+        pass
+    elif oe0 == 1 and oe1 == 0:
+        mb0, mb1 = mb1, mb0
+        t0, t1 = t1, t0
+    else:
+        raise RuntimeError("Both even and odd CPR frames are required.")
 
     # 131072 is 2^17, since CPR lat and lon are 17 bits each.
     cprlat_even = common.bin2int(mb0[22:39]) / 131072.0
@@ -67,17 +59,17 @@ def airborne_position(msg0, msg1, t0, t1):
         return None
 
     # compute ni, longitude index m, and longitude
-    if (t0 > t1):
+    if t0 > t1:
         lat = lat_even
         nl = common.cprNL(lat)
-        ni = max(common.cprNL(lat)- 0, 1)
-        m = common.floor(cprlon_even * (nl-1) - cprlon_odd * nl + 0.5)
+        ni = max(common.cprNL(lat) - 0, 1)
+        m = common.floor(cprlon_even * (nl - 1) - cprlon_odd * nl + 0.5)
         lon = (360.0 / ni) * (m % ni + cprlon_even)
     else:
         lat = lat_odd
         nl = common.cprNL(lat)
         ni = max(common.cprNL(lat) - 1, 1)
-        m = common.floor(cprlon_even * (nl-1) - cprlon_odd * nl + 0.5)
+        m = common.floor(cprlon_even * (nl - 1) - cprlon_odd * nl + 0.5)
         lon = (360.0 / ni) * (m % ni + cprlon_odd)
 
     if lon > 180:
@@ -93,7 +85,7 @@ def airborne_position_with_ref(msg, lat_ref, lon_ref):
     be with in 180NM of the true position.
 
     Args:
-        msg (string): even message (28 bytes hexadecimal string)
+        msg (str): even message (28 hexdigits)
         lat_ref: previous known latitude
         lon_ref: previous known longitude
 
@@ -101,17 +93,17 @@ def airborne_position_with_ref(msg, lat_ref, lon_ref):
         (float, float): (latitude, longitude) of the aircraft
     """
 
-
     mb = common.hex2bin(msg)[32:]
 
     cprlat = common.bin2int(mb[22:39]) / 131072.0
     cprlon = common.bin2int(mb[39:56]) / 131072.0
 
     i = int(mb[21])
-    d_lat = 360.0/59 if i else 360.0/60
+    d_lat = 360.0 / 59 if i else 360.0 / 60
 
-    j = common.floor(lat_ref / d_lat) \
-        + common.floor(0.5 + ((lat_ref % d_lat) / d_lat) - cprlat)
+    j = common.floor(lat_ref / d_lat) + common.floor(
+        0.5 + ((lat_ref % d_lat) / d_lat) - cprlat
+    )
 
     lat = d_lat * (j + cprlat)
 
@@ -122,8 +114,9 @@ def airborne_position_with_ref(msg, lat_ref, lon_ref):
     else:
         d_lon = 360.0
 
-    m = common.floor(lon_ref / d_lon) \
-        + common.floor(0.5 + ((lon_ref % d_lon) / d_lon) - cprlon)
+    m = common.floor(lon_ref / d_lon) + common.floor(
+        0.5 + ((lon_ref % d_lon) / d_lon) - cprlon
+    )
 
     lon = d_lon * (m + cprlon)
 
@@ -134,7 +127,7 @@ def altitude(msg):
     """Decode aircraft altitude
 
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
 
     Returns:
         int: altitude in feet
@@ -142,21 +135,17 @@ def altitude(msg):
 
     tc = common.typecode(msg)
 
-    if tc<9 or tc==19 or tc>22:
+    if tc < 9 or tc == 19 or tc > 22:
         raise RuntimeError("%s: Not a airborn position message" % msg)
 
     mb = common.hex2bin(msg)[32:]
+    altbin = mb[8:20]
 
     if tc < 19:
-        # barometric altitude
-        q = mb[15]
-        if q:
-            n = common.bin2int(mb[8:15]+mb[16:20])
-            alt = n * 25 - 1000
-        else:
-            alt = None
+        altcode = altbin[0:6] + "0" + altbin[6:]
     else:
-        # GNSS altitude, meters -> feet
-        alt = common.bin2int(mb[8:20]) * 3.28084
+        altcode = altbin[0:6] + "0" + altbin[6:]
+
+    alt = common.altitude(altcode)
 
     return alt

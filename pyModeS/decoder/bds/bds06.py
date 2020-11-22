@@ -1,30 +1,10 @@
-# Copyright (C) 2018 Junzi Sun (TU Delft)
+# ------------------------------------------
+#   BDS 0,6
+#   ADS-B TC=5-8
+#   Surface movment
+# ------------------------------------------
 
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
-"""
-------------------------------------------
-  BDS 0,6
-  ADS-B TC=5-8
-  Surface position
-------------------------------------------
-"""
-
-from __future__ import absolute_import, print_function, division
-from pyModeS.decoder import common
-import math
+from pyModeS import common
 
 
 def surface_position(msg0, msg1, t0, t1, lat_ref, lon_ref):
@@ -32,8 +12,8 @@ def surface_position(msg0, msg1, t0, t1, lat_ref, lon_ref):
     the lat/lon of receiver must be provided to yield the correct solution.
 
     Args:
-        msg0 (string): even message (28 bytes hexadecimal string)
-        msg1 (string): odd message (28 bytes hexadecimal string)
+        msg0 (string): even message (28 hexdigits)
+        msg1 (string): odd message (28 hexdigits)
         t0 (int): timestamps for the even message
         t1 (int): timestamps for the odd message
         lat_ref (float): latitude of the receiver
@@ -75,21 +55,24 @@ def surface_position(msg0, msg1, t0, t1, lat_ref, lon_ref):
         return None
 
     # compute ni, longitude index m, and longitude
-    if (t0 > t1):
+    if t0 > t1:
         lat = lat_even
         nl = common.cprNL(lat_even)
         ni = max(common.cprNL(lat_even) - 0, 1)
-        m = common.floor(cprlon_even * (nl-1) - cprlon_odd * nl + 0.5)
+        m = common.floor(cprlon_even * (nl - 1) - cprlon_odd * nl + 0.5)
         lon = (90.0 / ni) * (m % ni + cprlon_even)
     else:
         lat = lat_odd
         nl = common.cprNL(lat_odd)
         ni = max(common.cprNL(lat_odd) - 1, 1)
-        m = common.floor(cprlon_even * (nl-1) - cprlon_odd * nl + 0.5)
+        m = common.floor(cprlon_even * (nl - 1) - cprlon_odd * nl + 0.5)
         lon = (90.0 / ni) * (m % ni + cprlon_odd)
 
     # four possible longitude solutions
     lons = [lon, lon + 90.0, lon + 180.0, lon + 270.0]
+
+    # make sure lons are between -180 and 180
+    lons = [(l + 180) % 360 - 180 for l in lons]
 
     # the closest solution to receiver is the correct one
     dls = [abs(lon_ref - l) for l in lons]
@@ -106,7 +89,7 @@ def surface_position_with_ref(msg, lat_ref, lon_ref):
     be with in 45NM of the true position.
 
     Args:
-        msg (string): even message (28 bytes hexadecimal string)
+        msg (str): even message (28 hexdigits)
         lat_ref: previous known latitude
         lon_ref: previous known longitude
 
@@ -114,17 +97,17 @@ def surface_position_with_ref(msg, lat_ref, lon_ref):
         (float, float): (latitude, longitude) of the aircraft
     """
 
-
     mb = common.hex2bin(msg)[32:]
 
     cprlat = common.bin2int(mb[22:39]) / 131072.0
     cprlon = common.bin2int(mb[39:56]) / 131072.0
 
     i = int(mb[21])
-    d_lat = 90.0/59 if i else 90.0/60
+    d_lat = 90.0 / 59 if i else 90.0 / 60
 
-    j = common.floor(lat_ref / d_lat) \
-        + common.floor(0.5 + ((lat_ref % d_lat) / d_lat) - cprlat)
+    j = common.floor(lat_ref / d_lat) + common.floor(
+        0.5 + ((lat_ref % d_lat) / d_lat) - cprlat
+    )
 
     lat = d_lat * (j + cprlat)
 
@@ -135,25 +118,33 @@ def surface_position_with_ref(msg, lat_ref, lon_ref):
     else:
         d_lon = 90.0
 
-    m = common.floor(lon_ref / d_lon) \
-        + common.floor(0.5 + ((lon_ref % d_lon) / d_lon) - cprlon)
+    m = common.floor(lon_ref / d_lon) + common.floor(
+        0.5 + ((lon_ref % d_lon) / d_lon) - cprlon
+    )
 
     lon = d_lon * (m + cprlon)
 
     return round(lat, 5), round(lon, 5)
 
 
-def surface_velocity(msg):
-    """Decode surface velocity from from a surface position message
+def surface_velocity(msg, source=False):
+    """Decode surface velocity from a surface position message
+
     Args:
-        msg (string): 28 bytes hexadecimal message string
+        msg (str): 28 hexdigits string
+        source (boolean): Include direction and vertical rate sources in return. Default to False.
+            If set to True, the function will return six value instead of four.
 
     Returns:
-        (int, float, int, string): speed (kt), ground track (degree),
-            rate of climb/descend (ft/min), and speed type
-            ('GS' for ground speed, 'AS' for airspeed)
-    """
+        int, float, int, string, [string], [string]: Four or six parameters, including:
+            - Speed (kt)
+            - Angle (degree), ground track
+            - Vertical rate, always 0
+            - Speed type ('GS' for ground speed, 'AS' for airspeed)
+            - [Optional] Direction source ('TRUE_NORTH')
+            - [Optional] Vertical rate source (None)
 
+    """
     if common.typecode(msg) < 5 or common.typecode(msg) > 8:
         raise RuntimeError("%s: Not a surface message, expecting 5<TC<8" % msg)
 
@@ -167,7 +158,7 @@ def surface_velocity(msg):
     else:
         trk = None
 
-    # ground movment / speed
+    # ground movement / speed
     mov = common.bin2int(mb[5:12])
 
     if mov == 0 or mov > 124:
@@ -177,11 +168,12 @@ def surface_velocity(msg):
     elif mov == 124:
         spd = 175
     else:
-        movs = [2, 9, 13, 39, 94, 109, 124]
-        kts = [0.125, 1, 2, 15, 70, 100, 175]
-        i = next(m[0] for m in enumerate(movs) if m[1] > mov)
-        step = (kts[i] - kts[i-1]) * 1.0 / (movs[i]-movs[i-1])
-        spd = kts[i-1] + (mov-movs[i-1]) * step
-        spd = round(spd, 2)
-
-    return spd, trk, 0, 'GS'
+        mov_lb = [2, 9, 13, 39, 94, 109, 124]
+        kts_lb = [0.125, 1, 2, 15, 70, 100, 175]
+        step = [0.125, 0.25, 0.5, 1, 2, 5]
+        i = next(m[0] for m in enumerate(mov_lb) if m[1] > mov)
+        spd = kts_lb[i - 1] + (mov - mov_lb[i - 1]) * step[i - 1]
+    if source:
+        return spd, trk, 0, "GS", "TRUE_NORTH", None
+    else:
+        return spd, trk, 0, "GS"
